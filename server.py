@@ -1,8 +1,9 @@
 import os
+from urllib.parse import parse_qs
+
 from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
-from starlette.responses import HTMLResponse
-
+from starlette.responses import HTMLResponse, RedirectResponse
 mcp = FastMCP(
     "Citizen Help AI",
     host="0.0.0.0",
