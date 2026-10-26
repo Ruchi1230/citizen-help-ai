@@ -185,6 +185,150 @@ async def homepage(request: Request):
     """
     return HTMLResponse(html)
 
+ADMIN_COOKIE = "sevasetu_admin_session"
+SESSION_DURATION = 3600
+
+
+def create_session_signature(timestamp: str) -> str:
+    secret = os.environ.get("SECRET_KEY", "")
+    username = os.environ.get("ADMIN_USERNAME", "")
+    message = f"{username}:{timestamp}".encode()
+    return hmac.new(
+        secret.encode(), message, hashlib.sha256
+    ).hexdigest()
+
+
+def is_admin_logged_in(request: Request) -> bool:
+    username = os.environ.get("ADMIN_USERNAME", "")
+    secret = os.environ.get("SECRET_KEY", "")
+    cookie = request.cookies.get(ADMIN_COOKIE, "")
+
+    if not username or len(secret) < 32 or "." not in cookie:
+        return False
+
+    timestamp, signature = cookie.split(".", 1)
+
+    if not timestamp.isdigit():
+        return False
+
+    if time.time() - int(timestamp) > SESSION_DURATION:
+        return False
+
+    expected = create_session_signature(timestamp)
+    return hmac.compare_digest(signature, expected)
+
+
+@mcp.custom_route("/admin/login", methods=["GET", "POST"])
+async def admin_login(request: Request):
+    username = os.environ.get("ADMIN_USERNAME", "")
+    password = os.environ.get("ADMIN_PASSWORD", "")
+    secret = os.environ.get("SECRET_KEY", "")
+
+    if not username or not password or len(secret) < 32:
+        return HTMLResponse(
+            "Admin login is not configured. Check Render environment variables.",
+            status_code=503
+        )
+
+    error = ""
+
+    if request.method == "POST":
+        body = (await request.body()).decode("utf-8", errors="replace")
+        form = parse_qs(body)
+        entered_username = form.get("username", [""])[0]
+        entered_password = form.get("password", [""])[0]
+
+        valid_username = hmac.compare_digest(
+            entered_username, username
+        )
+        valid_password = hmac.compare_digest(
+            entered_password, password
+        )
+
+        if valid_username and valid_password:
+            timestamp = str(int(time.time()))
+            signature = create_session_signature(timestamp)
+
+            response = RedirectResponse("/admin", status_code=303)
+            response.set_cookie(
+                ADMIN_COOKIE,
+                f"{timestamp}.{signature}",
+                max_age=SESSION_DURATION,
+                httponly=True,
+                secure=True,
+                samesite="lax",
+                path="/admin"
+            )
+            return response
+
+        error = "Invalid username or password."
+
+    html = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Administrator Login | Seva Setu</title>
+      <style>
+        body { font-family: Arial; background: #f3f6fb; padding: 40px 16px; }
+        main { max-width: 380px; margin: 50px auto; background: white;
+               padding: 28px; border-radius: 12px; }
+        input, button { box-sizing: border-box; width: 100%; padding: 12px;
+                        margin: 9px 0; }
+        button { background: #124b8c; color: white; border: 0;
+                 border-radius: 6px; cursor: pointer; }
+        .error { color: #b42318; }
+      </style>
+    </head>
+    <body>
+      <main>
+        <h2>Administrator Login</h2>
+        <p>Sign in to the Seva Setu prototype.</p>
+        <p class="error">ERROR_MESSAGE</p>
+        <form method="post" action="/admin/login">
+          <label for="username">Username</label>
+          <input id="username" name="username" required autocomplete="username">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password"
+                 required autocomplete="current-password">
+          <button type="submit">Log in</button>
+        </form>
+      </main>
+    </body>
+    </html>
+    """
+    html = html.replace("ERROR_MESSAGE", error)
+    return HTMLResponse(html)
+
+
+@mcp.custom_route("/admin", methods=["GET"])
+async def admin_dashboard(request: Request):
+    if not is_admin_logged_in(request):
+        return RedirectResponse("/admin/login", status_code=303)
+
+    return HTMLResponse("""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head><meta charset="UTF-8"><title>Seva Setu Admin</title></head>
+    <body style="font-family:Arial;margin:40px">
+      <h1>Seva Setu Admin Dashboard</h1>
+      <p>You are logged in successfully.</p>
+      <p>This is a prototype dashboard. Service-management features
+         have not been implemented yet.</p>
+      <form method="post" action="/admin/logout">
+        <button type="submit">Log out</button>
+      </form>
+    </body>
+    </html>
+    """)
+
+
+@mcp.custom_route("/admin/logout", methods=["POST"])
+async def admin_logout(request: Request):
+    response = RedirectResponse("/admin/login", status_code=303)
+    response.delete_cookie(ADMIN_COOKIE, path="/admin")
+    return response
 
 if __name__ == "__main__":
     mcp.run(transport="streamable-http")
